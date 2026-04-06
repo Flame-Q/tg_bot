@@ -43,6 +43,8 @@ class AdminStates(StatesGroup):
     waiting_for_ban_login = State()
     waiting_for_ban_minutes = State()
     waiting_for_unban_login = State()
+    waiting_for_new_director_name = State()
+    waiting_for_new_director_surname = State()
 
 # ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 def get_kinopoisk_url(title):
@@ -139,12 +141,15 @@ async def profile_callback(callback: types.CallbackQuery):
             f"Цена: {user['price']} руб/мес\n"
             f"Баланс: {user['balance']} руб\n"
             f"Дата регистрации: {user['reg_date']}")
-    buttons = [
-        [InlineKeyboardButton(text="💰 Пополнить баланс", callback_data="recharge")],
-        [InlineKeyboardButton(text="🎫 Купить подписку", callback_data="buy_sub")],
-        [InlineKeyboardButton(text="🚪 Выйти из аккаунта", callback_data="logout")],
-        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")],
-    ]
+    
+    # Формируем кнопки в зависимости от роли
+    buttons = []
+    if user.get('role') != 'admin':
+        buttons.append([InlineKeyboardButton(text="💰 Пополнить баланс", callback_data="recharge")])
+        buttons.append([InlineKeyboardButton(text="🎫 Купить подписку", callback_data="buy_sub")])
+    buttons.append([InlineKeyboardButton(text="🚪 Выйти из аккаунта", callback_data="logout")])
+    buttons.append([InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")])
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer()
@@ -459,8 +464,12 @@ async def back_to_profile(callback: types.CallbackQuery):
     await profile_callback(callback)
 
 async def back_to_search(callback: types.CallbackQuery):
-    await callback.message.delete()
-    await callback.message.answer("Выберите действие:", reply_markup=kb.main_menu())
+    # Редактируем текущее сообщение, возвращая главное меню
+    user = db.get_user_by_telegram_id(callback.from_user.id)
+    if user and user.get('role') == 'admin':
+        await callback.message.edit_text("🏠 *Главное меню*", parse_mode="HTML", reply_markup=kb.admin_main_menu())
+    else:
+        await callback.message.edit_text("🏠 *Главное меню*", parse_mode="HTML", reply_markup=kb.main_menu())
     await callback.answer()
 
 # ---------- АДМИН-ПАНЕЛЬ ----------
@@ -528,7 +537,10 @@ async def admin_add_type_callback(callback: types.CallbackQuery, state: FSMConte
     if callback.data.startswith("admin_type_"):
         type_id = int(callback.data.split("_")[2])
         await state.update_data(type_id=type_id)
-        await callback.answer(f"Выбран тип ID {type_id}", show_alert=True)
+        types = db.get_movie_types()
+        keyboard = kb.admin_types_keyboard(types, selected_id=type_id)
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+        await callback.answer(f"Выбран тип (ID {type_id})", show_alert=False)
 
 async def admin_add_genres_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.data == "admin_genres_done":
@@ -562,6 +574,11 @@ async def admin_add_directors_callback(callback: types.CallbackQuery, state: FSM
         if not data.get('selected_directors'):
             await callback.answer("Выберите хотя бы одного режиссёра!", show_alert=True)
             return
+        # Берём только первого выбранного (т.к. выбор одиночный)
+        selected_director = data['selected_directors'][0] if data['selected_directors'] else None
+        if not selected_director:
+            await callback.answer("Выберите режиссёра!", show_alert=True)
+            return
         success, msg = db.add_movie(
             telegram_id=callback.from_user.id,
             title=data['title'],
@@ -570,23 +587,18 @@ async def admin_add_directors_callback(callback: types.CallbackQuery, state: FSM
             country=data['country'],
             type_id=data['type_id'],
             genre_ids=data['selected_genres'],
-            director_ids=data['selected_directors']
+            director_ids=[selected_director]  # передаём список из одного ID
         )
         await callback.message.edit_text(msg, reply_markup=kb.back_button())
         await state.clear()
         return
     if callback.data.startswith("admin_director_"):
         director_id = int(callback.data.split("_")[2])
-        data = await state.get_data()
-        selected = data.get('selected_directors', [])
-        if director_id in selected:
-            selected.remove(director_id)
-        else:
-            selected.append(director_id)
-        await state.update_data(selected_directors=selected)
+        # При одиночном выборе заменяем выбранного режиссёра, а не добавляем/удаляем
+        await state.update_data(selected_directors=[director_id])
         directors = db.get_all_directors_list()
-        await callback.message.edit_reply_markup(reply_markup=kb.admin_directors_keyboard(directors, selected=selected))
-        await callback.answer()
+        await callback.message.edit_reply_markup(reply_markup=kb.admin_directors_keyboard(directors, selected=[director_id]))
+        await callback.answer(f"Выбран режиссёр (ID {director_id})", show_alert=False)
 
 async def admin_delete_movie_start(callback: types.CallbackQuery, state: FSMContext):
     user = db.get_user_by_telegram_id(callback.from_user.id)
@@ -645,6 +657,30 @@ async def admin_unban_user_login(message: types.Message, state: FSMContext):
     await message.answer(msg, reply_markup=kb.back_button())
     await state.clear()
 
+# Добавление нового режиссёра
+async def admin_add_director_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("Введите имя режиссёра:")
+    await state.set_state(AdminStates.waiting_for_new_director_name)
+    await callback.answer()
+
+async def admin_add_director_name(message: types.Message, state: FSMContext):
+    await state.update_data(new_director_name=message.text.strip())
+    await message.answer("Введите фамилию режиссёра:")
+    await state.set_state(AdminStates.waiting_for_new_director_surname)
+
+async def admin_add_director_surname(message: types.Message, state: FSMContext):
+    surname = message.text.strip()
+    data = await state.get_data()
+    name = data['new_director_name']
+    success, msg = db.add_director(message.from_user.id, name, surname)
+    await message.answer(msg)
+    # Возвращаемся к выбору режиссёров
+    directors = db.get_all_directors_list()
+    selected = data.get('selected_directors', [])
+    await message.answer("Теперь выберите режиссёра (можно только одного):", 
+                         reply_markup=kb.admin_directors_keyboard(directors, selected))
+    await state.set_state(AdminStates.waiting_for_add_directors)
+
 # ---------- РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ----------
 def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_start, Command("start"))
@@ -685,6 +721,11 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(admin_delete_movie_start, lambda c: c.data == "admin_delete_movie")
     dp.callback_query.register(admin_ban_user_start, lambda c: c.data == "admin_ban_user")
     dp.callback_query.register(admin_unban_user_start, lambda c: c.data == "admin_unban_user")
+
+    dp.callback_query.register(admin_add_director_start, lambda c: c.data == "admin_add_director")
+    dp.message.register(admin_add_director_name, AdminStates.waiting_for_new_director_name)
+    dp.message.register(admin_add_director_surname, AdminStates.waiting_for_new_director_surname)
+
     dp.message.register(admin_add_title, AdminStates.waiting_for_add_title)
     dp.message.register(admin_add_year, AdminStates.waiting_for_add_year)
     dp.message.register(admin_add_description, AdminStates.waiting_for_add_description)

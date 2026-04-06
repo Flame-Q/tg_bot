@@ -219,6 +219,20 @@ def delete_movie_by_title(telegram_id, title):
         cursor.close()
         conn.close()
 
+def get_banned_users():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT u.login, u.name, u.surname, b.ban_until
+        FROM users u
+        JOIN bans b ON u.id_us = b.user_id
+        WHERE b.ban_until > NOW()
+    """)
+    users = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return users
+
 def ban_user(telegram_id, user_login, minutes):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -247,10 +261,12 @@ def unban_user(telegram_id, user_login):
     admin = cursor.fetchone()
     if not admin or admin['role'] != 'admin':
         return False, "Недостаточно прав"
-    cursor.execute("SELECT id_us FROM users WHERE login = %s", (user_login,))
+    cursor.execute("SELECT id_us, is_banned FROM users WHERE login = %s", (user_login,))
     user = cursor.fetchone()
     if not user:
         return False, "Пользователь не найден"
+    if not user['is_banned']:
+        return False, "Пользователь не находится в бане"
     cursor.execute("DELETE FROM bans WHERE user_id = %s", (user['id_us'],))
     cursor.execute("UPDATE users SET is_banned = FALSE WHERE id_us = %s", (user['id_us'],))
     conn.commit()

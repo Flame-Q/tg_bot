@@ -168,12 +168,27 @@ def directors_keyboard(directors, selected=None):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # Клавиатура для выбора типа фильма (админка)
-def admin_types_keyboard(types):
+def admin_types_keyboard(types, selected_id=None):
     buttons = []
     for t in types:
-        buttons.append([InlineKeyboardButton(text=t['name'], callback_data=f"admin_type_{t['id_type']}")])
-    buttons.append([InlineKeyboardButton(text="➕ Добавить тип", callback_data="admin_add_type")])
+        text = t['name']
+        if selected_id == t['id_type']:
+            text = "✅ " + text
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"admin_type_{t['id_type']}")])
     buttons.append([InlineKeyboardButton(text="Готово", callback_data="admin_types_done")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def admin_directors_keyboard(directors, selected=None):
+    if selected is None:
+        selected = []
+    buttons = []
+    for d in directors:
+        text = d['full_name']
+        if d['id_dir'] in selected:
+            text = "✅ " + text
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"admin_director_{d['id_dir']}")])
+    buttons.append([InlineKeyboardButton(text="➕ Добавить режиссёра", callback_data="admin_add_director")])
+    buttons.append([InlineKeyboardButton(text="Готово", callback_data="admin_directors_done")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # Клавиатура для выбора жанров (админка)
