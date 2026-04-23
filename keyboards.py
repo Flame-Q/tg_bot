@@ -11,6 +11,7 @@ def main_menu():
         [InlineKeyboardButton(text="📋 Все фильмы", callback_data="all_movies")],
         [InlineKeyboardButton(text="❤️ Избранное", callback_data="favorites")],
         [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="profile")],
+        [InlineKeyboardButton(text="📊 Экспорт", callback_data="export_data")],   
         [InlineKeyboardButton(text="ℹ️ О боте", callback_data="about_bot")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -27,6 +28,7 @@ def admin_main_menu():
         [InlineKeyboardButton(text="❤️ Избранное", callback_data="favorites")],
         [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="profile")],
         [InlineKeyboardButton(text="👑 Админка", callback_data="admin_panel")],
+        [InlineKeyboardButton(text="📊 Экспорт", callback_data="export_data")],   
         [InlineKeyboardButton(text="ℹ️ О боте", callback_data="about_bot")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

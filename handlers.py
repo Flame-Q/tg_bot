@@ -4,6 +4,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import BufferedInputFile
 import database as db
 import keyboards as kb
 from urllib.parse import quote
@@ -17,6 +18,13 @@ class AuthStates(StatesGroup):
     waiting_for_register_name = State()
     waiting_for_register_surname = State()
     waiting_for_register_email = State()
+    waiting_for_secret_word = State()  # ДОБАВЛЕНО
+
+class RestoreStates(StatesGroup):
+    waiting_for_email = State()
+    waiting_for_secret_word = State()
+    waiting_for_new_password = State()
+    waiting_for_confirm_password = State()
 
 class SearchStates(StatesGroup):
     waiting_for_title = State()
@@ -56,27 +64,45 @@ async def show_main_menu(message: types.Message, is_admin=False):
     else:
         await message.answer("🏠 *Главное меню*", parse_mode="HTML", reply_markup=kb.main_menu())
 
-# ---------- АВТОРИЗАЦИЯ ----------
+# ---------- АВТОРИЗАЦИЯ (С РЕДАКТИРОВАНИЕМ) ----------
 async def cmd_start(message: types.Message, state: FSMContext):
-    await message.answer("Добро пожаловать! Используйте /login для входа или /register для регистрации.")
+    await state.clear()
+    await message.answer("Добро пожаловать! Используйте /login для входа, /register для регистрации или /restore для восстановления пароля.")
 
 async def cmd_login(message: types.Message, state: FSMContext):
-    await message.answer("Введите ваш логин:")
+    await state.clear()
+    msg = await message.answer("Введите ваш логин:")
+    await state.update_data(temp_message_id=msg.message_id)
     await state.set_state(AuthStates.waiting_for_login)
 
 async def process_login(message: types.Message, state: FSMContext):
-    login = message.text.strip()
-    await state.update_data(login=login)
-    await message.answer("Введите пароль:")
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_login(message, state)
+        return
+    await message.delete()
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Введите пароль:"
+    )
+    await state.update_data(login=message.text.strip())
     await state.set_state(AuthStates.waiting_for_password)
 
 async def process_password(message: types.Message, state: FSMContext):
-    password = message.text.strip()
     data = await state.get_data()
-    login = data['login']
+    temp_msg_id = data.get('temp_message_id')
+    login = data.get('login')
+    if not temp_msg_id or not login:
+        await cmd_login(message, state)
+        return
+    password = message.text.strip()
+    await message.delete()
     user, error = db.login_user(login, password)
     if user:
         db.update_telegram_id(user['id_us'], message.from_user.id)
+        await message.bot.delete_message(chat_id=message.chat.id, message_id=temp_msg_id)
         if user['role'] == 'admin':
             await message.answer("Вход выполнен как администратор!")
             await show_main_menu(message, is_admin=True)
@@ -85,48 +111,232 @@ async def process_password(message: types.Message, state: FSMContext):
             await show_main_menu(message, is_admin=False)
         await state.clear()
     else:
-        await message.answer(f"Ошибка: {error}")
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text=f"Ошибка: {error}\nПопробуйте снова /login"
+        )
         await state.clear()
 
+# ---------- РЕГИСТРАЦИЯ (С РЕДАКТИРОВАНИЕМ) ----------
 async def cmd_register(message: types.Message, state: FSMContext):
-    await message.answer("Введите желаемый логин:")
+    await state.clear()
+    msg = await message.answer("Введите желаемый логин:")
+    await state.update_data(temp_message_id=msg.message_id)
     await state.set_state(AuthStates.waiting_for_register_login)
 
 async def process_register_login(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_register(message, state)
+        return
+    await message.delete()
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Введите пароль:"
+    )
     await state.update_data(reg_login=message.text.strip())
-    await message.answer("Введите пароль:")
     await state.set_state(AuthStates.waiting_for_register_password)
 
 async def process_register_password(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_register(message, state)
+        return
+    await message.delete()
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Введите ваше имя:"
+    )
     await state.update_data(reg_password=message.text.strip())
-    await message.answer("Введите ваше имя:")
     await state.set_state(AuthStates.waiting_for_register_name)
 
 async def process_register_name(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_register(message, state)
+        return
+    await message.delete()
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Введите вашу фамилию:"
+    )
     await state.update_data(reg_name=message.text.strip())
-    await message.answer("Введите вашу фамилию:")
     await state.set_state(AuthStates.waiting_for_register_surname)
 
 async def process_register_surname(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_register(message, state)
+        return
+    await message.delete()
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Введите ваш email:"
+    )
     await state.update_data(reg_surname=message.text.strip())
-    await message.answer("Введите ваш email:")
     await state.set_state(AuthStates.waiting_for_register_email)
 
 async def process_register_email(message: types.Message, state: FSMContext):
     email = message.text.strip()
     if "@" not in email:
-        await message.answer("Email должен содержать '@'. Попробуйте снова.")
+        data = await state.get_data()
+        temp_msg_id = data.get('temp_message_id')
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text="Email должен содержать '@'. Попробуйте снова:\nВведите ваш email:"
+        )
+        await message.delete()
         return
+    await message.delete()
     data = await state.get_data()
-    login = data['reg_login']
-    password = data['reg_password']
-    name = data['reg_name']
-    surname = data['reg_surname']
-    success, msg = db.register_user(login, password, name, surname, email)
+    temp_msg_id = data.get('temp_message_id')
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Придумайте секретное слово для восстановления пароля (запомните его!):"
+    )
+    await state.update_data(reg_email=email)
+    await state.set_state(AuthStates.waiting_for_secret_word)
+
+async def process_register_secret_word(message: types.Message, state: FSMContext):
+    secret_word = message.text.strip()
+    if len(secret_word) < 3:
+        data = await state.get_data()
+        temp_msg_id = data.get('temp_message_id')
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text="Секретное слово должно содержать хотя бы 3 символа. Попробуйте снова:"
+        )
+        await message.delete()
+        return
+    await message.delete()
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    login = data.get('reg_login')
+    password = data.get('reg_password')
+    name = data.get('reg_name')
+    surname = data.get('reg_surname')
+    email = data.get('reg_email')
+    success, msg = db.register_user(login, password, name, surname, email, secret_word)
+    await message.bot.delete_message(chat_id=message.chat.id, message_id=temp_msg_id)
     await message.answer(msg)
     if success:
         await message.answer("Теперь вы можете войти с помощью /login")
     await state.clear()
+
+# ---------- ВОССТАНОВЛЕНИЕ ПАРОЛЯ (С РЕДАКТИРОВАНИЕМ) ----------
+async def cmd_restore(message: types.Message, state: FSMContext):
+    await state.clear()
+    msg = await message.answer("Введите email аккаунта, пароль которого хотите восстановить:")
+    await state.update_data(temp_message_id=msg.message_id)
+    await state.set_state(RestoreStates.waiting_for_email)
+
+async def process_restore_email(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_restore(message, state)
+        return
+    email = message.text.strip()
+    await message.delete()
+    user = db.get_user_by_email(email)
+    if not user:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text="Пользователь с таким email не найден. Попробуйте ещё раз или зарегистрируйтесь."
+        )
+        await state.clear()
+        return
+    await state.update_data(restore_email=email)
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Введите секретное слово, указанное при регистрации:"
+    )
+    await state.set_state(RestoreStates.waiting_for_secret_word)
+
+async def process_restore_secret_word(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    email = data.get('restore_email')
+    if not temp_msg_id or not email:
+        await cmd_restore(message, state)
+        return
+    word = message.text.strip()
+    await message.delete()
+    if db.verify_secret_word(email, word):
+        await state.update_data(restore_secret_ok=True)
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text="Секретное слово верно. Введите новый пароль:"
+        )
+        await state.set_state(RestoreStates.waiting_for_new_password)
+    else:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text="Неверное секретное слово. Попробуйте снова или начните заново через /restore."
+        )
+        await state.clear()
+
+async def process_restore_new_password(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_restore(message, state)
+        return
+    password = message.text.strip()
+    await message.delete()
+    if len(password) < 4:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text="Пароль должен содержать хотя бы 4 символа. Попробуйте снова:"
+        )
+        return
+    await state.update_data(new_password=password)
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=temp_msg_id,
+        text="Повторите новый пароль:"
+    )
+    await state.set_state(RestoreStates.waiting_for_confirm_password)
+
+async def process_restore_confirm_password(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    temp_msg_id = data.get('temp_message_id')
+    if not temp_msg_id:
+        await cmd_restore(message, state)
+        return
+    confirm = message.text.strip()
+    await message.delete()
+    new_pass = data.get('new_password')
+    email = data.get('restore_email')
+    if new_pass == confirm:
+        db.update_password_by_email(email, confirm)
+        await message.bot.delete_message(chat_id=message.chat.id, message_id=temp_msg_id)
+        await message.answer("Пароль успешно изменён! Теперь вы можете войти с новым паролем через /login")
+        await state.clear()
+    else:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=temp_msg_id,
+            text="Пароли не совпадают. Попробуйте ещё раз.\nВведите новый пароль:"
+        )
+        await state.set_state(RestoreStates.waiting_for_new_password)
 
 # ---------- ЛИЧНЫЙ КАБИНЕТ ----------
 async def profile_callback(callback: types.CallbackQuery):
@@ -464,7 +674,6 @@ async def back_to_profile(callback: types.CallbackQuery):
     await profile_callback(callback)
 
 async def back_to_search(callback: types.CallbackQuery):
-    # Редактируем текущее сообщение, возвращая главное меню
     user = db.get_user_by_telegram_id(callback.from_user.id)
     if user and user.get('role') == 'admin':
         await callback.message.edit_text("🏠 *Главное меню*", parse_mode="HTML", reply_markup=kb.admin_main_menu())
@@ -574,7 +783,6 @@ async def admin_add_directors_callback(callback: types.CallbackQuery, state: FSM
         if not data.get('selected_directors'):
             await callback.answer("Выберите хотя бы одного режиссёра!", show_alert=True)
             return
-        # Берём только первого выбранного (т.к. выбор одиночный)
         selected_director = data['selected_directors'][0] if data['selected_directors'] else None
         if not selected_director:
             await callback.answer("Выберите режиссёра!", show_alert=True)
@@ -587,14 +795,13 @@ async def admin_add_directors_callback(callback: types.CallbackQuery, state: FSM
             country=data['country'],
             type_id=data['type_id'],
             genre_ids=data['selected_genres'],
-            director_ids=[selected_director]  # передаём список из одного ID
+            director_ids=[selected_director]
         )
         await callback.message.edit_text(msg, reply_markup=kb.back_button())
         await state.clear()
         return
     if callback.data.startswith("admin_director_"):
         director_id = int(callback.data.split("_")[2])
-        # При одиночном выборе заменяем выбранного режиссёра, а не добавляем/удаляем
         await state.update_data(selected_directors=[director_id])
         directors = db.get_all_directors_list()
         await callback.message.edit_reply_markup(reply_markup=kb.admin_directors_keyboard(directors, selected=[director_id]))
@@ -657,7 +864,7 @@ async def admin_unban_user_login(message: types.Message, state: FSMContext):
     await message.answer(msg, reply_markup=kb.back_button())
     await state.clear()
 
-# Добавление нового режиссёра
+# ---------- ДОБАВЛЕНИЕ НОВОГО РЕЖИССЁРА ----------
 async def admin_add_director_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Введите имя режиссёра:")
     await state.set_state(AdminStates.waiting_for_new_director_name)
@@ -674,18 +881,38 @@ async def admin_add_director_surname(message: types.Message, state: FSMContext):
     name = data['new_director_name']
     success, msg = db.add_director(message.from_user.id, name, surname)
     await message.answer(msg)
-    # Возвращаемся к выбору режиссёров
     directors = db.get_all_directors_list()
     selected = data.get('selected_directors', [])
     await message.answer("Теперь выберите режиссёра (можно только одного):", 
                          reply_markup=kb.admin_directors_keyboard(directors, selected))
     await state.set_state(AdminStates.waiting_for_add_directors)
 
+async def export_data_callback(callback: types.CallbackQuery):
+    # Отправляем сообщение о начале генерации
+    await callback.message.edit_text("⏳ Генерация Excel-файла... Пожалуйста, подождите.")
+    await callback.answer()
+    
+    # Генерируем файл
+    excel_file = db.export_movies_and_directors_to_excel()
+    
+    # Отправляем файл пользователю
+    await callback.message.answer_document(
+        document=types.BufferedInputFile(excel_file.getvalue(), filename="cinema_data.xlsx"),
+        caption="📊 Выгрузка базы данных (фильмы и режиссёры)"
+    )
+    # Возвращаем главное меню (редактируем исходное сообщение)
+    user = db.get_user_by_telegram_id(callback.from_user.id)
+    if user and user.get('role') == 'admin':
+        await callback.message.edit_text("🏠 *Главное меню*", parse_mode="HTML", reply_markup=kb.admin_main_menu())
+    else:
+        await callback.message.edit_text("🏠 *Главное меню*", parse_mode="HTML", reply_markup=kb.main_menu())
+
 # ---------- РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ----------
 def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_start, Command("start"))
     dp.message.register(cmd_login, Command("login"))
     dp.message.register(cmd_register, Command("register"))
+    dp.message.register(cmd_restore, Command("restore"))  # НОВАЯ КОМАНДА
     dp.message.register(process_login, AuthStates.waiting_for_login)
     dp.message.register(process_password, AuthStates.waiting_for_password)
     dp.message.register(process_register_login, AuthStates.waiting_for_register_login)
@@ -693,6 +920,14 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(process_register_name, AuthStates.waiting_for_register_name)
     dp.message.register(process_register_surname, AuthStates.waiting_for_register_surname)
     dp.message.register(process_register_email, AuthStates.waiting_for_register_email)
+    dp.message.register(process_register_secret_word, AuthStates.waiting_for_secret_word)
+    # Восстановление
+    dp.message.register(process_restore_email, RestoreStates.waiting_for_email)
+    dp.message.register(process_restore_secret_word, RestoreStates.waiting_for_secret_word)
+    dp.message.register(process_restore_new_password, RestoreStates.waiting_for_new_password)
+    dp.message.register(process_restore_confirm_password, RestoreStates.waiting_for_confirm_password)
+    
+    # Callback'и (остальные без изменений)
     dp.callback_query.register(profile_callback, lambda c: c.data == "profile")
     dp.callback_query.register(logout_callback, lambda c: c.data == "logout")
     dp.callback_query.register(recharge_callback, lambda c: c.data and c.data.startswith("recharge"))
@@ -721,8 +956,8 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(admin_delete_movie_start, lambda c: c.data == "admin_delete_movie")
     dp.callback_query.register(admin_ban_user_start, lambda c: c.data == "admin_ban_user")
     dp.callback_query.register(admin_unban_user_start, lambda c: c.data == "admin_unban_user")
-
     dp.callback_query.register(admin_add_director_start, lambda c: c.data == "admin_add_director")
+    dp.callback_query.register(export_data_callback, lambda c: c.data == "export_data")
     dp.message.register(admin_add_director_name, AdminStates.waiting_for_new_director_name)
     dp.message.register(admin_add_director_surname, AdminStates.waiting_for_new_director_surname)
 
@@ -741,4 +976,4 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(process_review_rating, ReviewStates.waiting_for_rating)
     dp.message.register(process_review_title, ReviewStates.waiting_for_title)
     dp.message.register(process_review_comment, ReviewStates.waiting_for_comment)
-    dp.message.register(process_title_search, SearchStates.waiting_for_title)
+    dp.message.register(process_title_search, SearchStates.waiting_for_title)   

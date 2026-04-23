@@ -3,22 +3,30 @@ from config import DB_CONFIG
 import hashlib
 from datetime import datetime, timedelta
 
+import io
+from openpyxl import Workbook
+
 def get_db_connection():
     return mysql.connector.connect(**DB_CONFIG)
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
+def hash_secret_word(word):
+    """Хэширование секретного слова (можно использовать тот же алгоритм)"""
+    return hashlib.sha256(word.encode()).hexdigest()
+
 # ---------- ПОЛЬЗОВАТЕЛИ И АУТЕНТИФИКАЦИЯ ----------
-def register_user(login, password, name, surname, email):
+def register_user(login, password, name, surname, email, secret_word):
     conn = get_db_connection()
     cursor = conn.cursor()
     password_hash = hash_password(password)
+    secret_hash = hash_secret_word(secret_word)
     try:
         cursor.execute("""
-            INSERT INTO users (login, password_hash, name, surname, email, subscriptions_id_sub, balance, role)
-            VALUES (%s, %s, %s, %s, %s, 1, 0.00, 'user')
-        """, (login, password_hash, name, surname, email))
+            INSERT INTO users (login, password_hash, secret_word_hash, name, surname, email, subscriptions_id_sub, balance, role)
+            VALUES (%s, %s, %s, %s, %s, %s, 1, 0.00, 'user')
+        """, (login, password_hash, secret_hash, name, surname, email))
         conn.commit()
         return True, "Регистрация успешна!"
     except mysql.connector.IntegrityError as e:
@@ -65,6 +73,39 @@ def get_user_by_login(login):
     conn.close()
     return user
 
+def get_user_by_email(email):
+    """ДОБАВЛЕНО ДЛЯ ВОССТАНОВЛЕНИЯ"""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return user
+
+def verify_secret_word(email, word):
+    """ДОБАВЛЕНО ДЛЯ ВОССТАНОВЛЕНИЯ"""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT secret_word_hash FROM users WHERE email = %s", (email,))
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if user and user['secret_word_hash'] == hash_secret_word(word):
+        return True
+    return False
+
+def update_password_by_email(email, new_password):
+    """ДОБАВЛЕНО ДЛЯ ВОССТАНОВЛЕНИЯ"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    new_hash = hash_password(new_password)
+    cursor.execute("UPDATE users SET password_hash = %s WHERE email = %s", (new_hash, email))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return True
+
 def get_user_by_telegram_id(telegram_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
@@ -82,6 +123,9 @@ def get_user_by_telegram_id(telegram_id):
 def update_telegram_id(user_id, telegram_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    # Сначала обнуляем telegram_id у всех других пользователей, у которых он совпадает с новым
+    cursor.execute("UPDATE users SET telegram_id = NULL WHERE telegram_id = %s AND id_us != %s", (telegram_id, user_id))
+    # Затем обновляем текущего пользователя
     cursor.execute("UPDATE users SET telegram_id = %s WHERE id_us = %s", (telegram_id, user_id))
     conn.commit()
     cursor.close()
@@ -208,7 +252,6 @@ def delete_movie_by_title(telegram_id, title):
     if not movie:
         return False, "Фильм не найден"
     try:
-        # ИСПРАВЛЕНО: используем movie['id_mov']
         cursor.execute("DELETE FROM movies WHERE id_mov = %s", (movie['id_mov'],))
         conn.commit()
         return True, f"Фильм '{title}' удалён"
@@ -515,3 +558,34 @@ def add_movie_type(telegram_id, name, description):
     finally:
         cursor.close()
         conn.close()
+
+def export_movies_and_directors_to_excel():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute("SELECT id_mov, title, release_year, description, country FROM movies ORDER BY id_mov")
+    movies = cursor.fetchall()
+    
+    cursor.execute("SELECT id_dir, name, surname FROM directors ORDER BY id_dir")
+    directors = cursor.fetchall()
+    
+    cursor.close()
+    conn.close()
+    
+    wb = Workbook()
+    
+    ws_movies = wb.active
+    ws_movies.title = "Фильмы"
+    ws_movies.append(["ID", "Название", "Год выпуска", "Описание", "Страна"])
+    for m in movies:
+        ws_movies.append([m['id_mov'], m['title'], m['release_year'], m['description'], m['country']])
+    
+    ws_directors = wb.create_sheet("Режиссёры")
+    ws_directors.append(["ID", "Имя", "Фамилия"])
+    for d in directors:
+        ws_directors.append([d['id_dir'], d['name'], d['surname']])
+    
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
